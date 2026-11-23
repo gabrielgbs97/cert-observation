@@ -1,0 +1,1023 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE rfc [
+  <!ENTITY nbsp "&#160;">
+]>
+<rfc xmlns:xi="http://www.w3.org/2001/XInclude"
+     version="3"
+     category="std"
+     docName="draft-barcelo-opsawg-cert-observation-00"
+     ipr="trust200902"
+     submissionType="IETF"
+     consensus="true"
+     xml:lang="en"
+     tocInclude="true"
+     sortRefs="true"
+     symRefs="true">
+
+  <front>
+    <title abbrev="Certificate Observation Records">An Information Model and JSON Encoding for Certificate Observation Records</title>
+    <seriesInfo name="Internet-Draft" value="draft-barcelo-opsawg-cert-observation-00"/>
+
+    <author fullname="Gabriel Barceló Soteras" asciiFullname="Gabriel Barcelo Soteras"
+            initials="G." surname="Barceló Soteras" asciiSurname="Barcelo Soteras">
+      <organization>Parlament de les Illes Balears</organization>
+      <address>
+        <postal>
+          <city>Palma</city>
+          <country>Spain</country>
+        </postal>
+        <email>gbarcelo@parlamentib.es</email>
+      </address>
+    </author>
+
+    <date year="2026" month="November" day="23"/>
+    <area>Operations and Management</area>
+    <workgroup>Operations and Management Area Working Group</workgroup>
+    <keyword>certificate</keyword>
+    <keyword>monitoring</keyword>
+    <keyword>inventory</keyword>
+    <keyword>X.509</keyword>
+    <keyword>lifecycle</keyword>
+
+    <abstract>
+      <t>Operators need to know which X.509 certificates are installed where,
+      when they expire, and whether a renewed certificate has actually reached
+      the service that uses it. This information is produced by many different
+      parties: network observers, local agents, configuration management
+      systems, and certificate issuers. Each currently uses its own format, and
+      many endpoints cannot be reached by a central monitoring system at all.</t>
+      <t>This document defines the Certificate Observation Record: a
+      transport-independent information model describing one certificate as
+      seen at one location by one reporter, together with a JSON encoding, an
+      HTTP-based exchange mechanism, and a file-based handoff. The record
+      distinguishes the reporter from the subject it describes, so that one
+      system can report on behalf of endpoints that a collector cannot reach,
+      and it labels each record with the kind of evidence it carries, so that
+      a collector can detect when issuance, deployment and actual service
+      diverge.</t>
+    </abstract>
+
+    <note removeInRFC="true">
+      <name>About This Document</name>
+      <t>Discussion of this document is expected to take place on the
+      Operations and Management Area Working Group mailing list
+      (opsawg@ietf.org). Feedback on the ACME and LAMPS lists is also
+      welcome where relevant.</t>
+    </note>
+  </front>
+
+  <middle>
+
+    <section anchor="intro">
+      <name>Introduction</name>
+      <t>The maximum validity of publicly trusted TLS server certificates is
+      being reduced in stages, reaching 47 days in 2029 <xref target="SC-081"/>.
+      Many organisations apply similar or shorter lifetimes to certificates
+      from private certification authorities. As lifetimes shrink, certificate
+      renewal must be automated, and the failure modes move: issuance usually
+      succeeds, but the new certificate is not installed on every endpoint, is
+      installed but not loaded by the service, or is installed on a system that
+      no monitoring tool examines.</t>
+      <t>Automated issuance protocols such as ACME <xref target="RFC8555"/> and
+      ACME Renewal Information <xref target="RFC9773"/> tell a client when to
+      renew. They do not tell an operator whether the result reached every
+      place where it is needed. Certificate Transparency <xref target="RFC9162"/>
+      records publicly trusted issuance but not deployment, and does not cover
+      private certification authorities.</t>
+      <t>In practice, knowledge about certificates is spread across several
+      systems:</t>
+      <ul>
+        <li>network observers that connect to a service and record the
+        certificate it presents;</li>
+        <li>local agents that read certificates from files, platform
+        certificate stores or application key stores;</li>
+        <li>configuration management systems that hold the desired state and
+        perform deployments, often on endpoints that the monitoring system
+        cannot reach;</li>
+        <li>issuer systems, such as certification authorities and ACME
+        servers, that know what was issued and when renewal is due.</li>
+      </ul>
+      <t>Each of these uses its own data format, so correlating them requires
+      custom integration for every pair of tools. In addition, a large class of
+      certificates is invisible to network observation: endpoints in isolated
+      network segments, services that only accept mutually authenticated TLS,
+      intermittently connected devices, and certificates that are never
+      presented on a listening port at all, such as client certificates,
+      signing certificates and certificates waiting on disk to be loaded.</t>
+      <t>This document defines a common record format so that any of these
+      parties can describe what it knows about a certificate, and any
+      collector can consume and correlate those descriptions. It specifies:</t>
+      <ul>
+        <li>an information model for a Certificate Observation Record (<xref target="model"/>);</li>
+        <li>a JSON encoding, with a CDDL <xref target="RFC8610"/> definition (<xref target="json"/>);</li>
+        <li>an HTTP push and pull binding, and a file-based handoff (<xref target="bindings"/>);</li>
+        <li>guidance on how collectors correlate records (<xref target="processing"/>).</li>
+      </ul>
+      <t>The information model is intended to be bound to other transports in
+      the future, including a YANG data model and an SNMP notification profile;
+      see <xref target="future"/>.</t>
+
+      <section anchor="scope">
+        <name>Scope</name>
+        <t>This document covers X.509 certificates <xref target="RFC5280"/> used
+        by any protocol, not only TLS. It does not define how certificates are
+        requested, issued, renewed or installed, and it does not define
+        alerting policy. A record describes a certificate; it never carries
+        private key material.</t>
+      </section>
+
+      <section anchor="reqs">
+        <name>Requirements Language</name>
+        <t>The key words "<bcp14>MUST</bcp14>", "<bcp14>MUST NOT</bcp14>",
+        "<bcp14>REQUIRED</bcp14>", "<bcp14>SHALL</bcp14>",
+        "<bcp14>SHALL NOT</bcp14>", "<bcp14>SHOULD</bcp14>",
+        "<bcp14>SHOULD NOT</bcp14>", "<bcp14>RECOMMENDED</bcp14>",
+        "<bcp14>NOT RECOMMENDED</bcp14>", "<bcp14>MAY</bcp14>", and
+        "<bcp14>OPTIONAL</bcp14>" in this document are to be interpreted as
+        described in BCP&nbsp;14 <xref target="RFC2119"/> <xref target="RFC8174"/>
+        when, and only when, they appear in all capitals, as shown here.</t>
+      </section>
+    </section>
+
+    <section anchor="terminology">
+      <name>Terminology</name>
+      <dl newline="false" spacing="normal">
+        <dt>Certificate Observation Record (record):</dt>
+        <dd>A statement, made by one Reporter at one point in time, about one
+        certificate (or the absence of an expected certificate) at one Location
+        of one Subject.</dd>
+        <dt>Reporter:</dt>
+        <dd>The system that produces a record. A Reporter may describe itself
+        or another system.</dd>
+        <dt>Subject:</dt>
+        <dd>The system or service that the record is about. The Subject is the
+        entity under which a Collector files the record.</dd>
+        <dt>Proxy reporting:</dt>
+        <dd>The case where the Reporter and the Subject are different systems,
+        for example a configuration management system reporting on an
+        endpoint it manages.</dd>
+        <dt>Location:</dt>
+        <dd>Where on the Subject the certificate was found or is expected:
+        a network endpoint, a file, a certificate store entry, or a
+        configuration item.</dd>
+        <dt>Evidence type:</dt>
+        <dd>How the Reporter came to know the information in the record
+        (see <xref target="evidence"/>).</dd>
+        <dt>Collector:</dt>
+        <dd>A system that receives records from Reporters, stores them, and
+        correlates them. A monitoring system, a certificate lifecycle
+        management system or a security information system can act as a
+        Collector.</dd>
+        <dt>Network observer:</dt>
+        <dd>A Reporter that learns about certificates by connecting to a
+        network service and examining what it presents.</dd>
+        <dt>Local agent:</dt>
+        <dd>A Reporter running on the Subject that reads certificates from
+        local files, platform certificate stores or application key
+        stores.</dd>
+        <dt>Configuration management system:</dt>
+        <dd>A system that holds the desired configuration of managed endpoints
+        and deploys files and settings to them.</dd>
+        <dt>Issuer system:</dt>
+        <dd>A certification authority, registration authority or automated
+        issuance server (for example an ACME server) that can report what it
+        issued.</dd>
+      </dl>
+    </section>
+
+    <section anchor="usecases">
+      <name>Use Cases</name>
+
+      <section anchor="uc-wire">
+        <name>Network Observation</name>
+        <t>A network observer periodically connects to known services,
+        completes a TLS handshake, and records the presented certificate and
+        chain. This is the most common form of certificate monitoring today. It
+        shows what clients actually receive, but only for services the observer
+        can reach and authenticate to.</t>
+      </section>
+
+      <section anchor="uc-unreachable">
+        <name>Endpoints Not Reachable by the Collector</name>
+        <t>Many endpoints cannot be reached by a central observer: systems in
+        isolated or perimeter network segments, services listening only on
+        local interfaces, services that require client authentication,
+        intermittently connected devices, and remote sites. A local agent on
+        such an endpoint reads its certificates and sends records outbound to a
+        Collector, or places them where an existing agent forwards them. Only
+        one outbound path from the endpoint is required.</t>
+      </section>
+
+      <section anchor="uc-proxy">
+        <name>Reporting by a Configuration Management System</name>
+        <t>A configuration management system often has access to endpoints that
+        the Collector cannot reach, and knows which certificate each endpoint
+        is supposed to hold. It can report, on behalf of each managed endpoint,
+        what it declared and what it deployed, and it can run collection tasks
+        on the endpoint and report the observed result. The Collector files
+        these records under the managed endpoint, not under the configuration
+        management system.</t>
+      </section>
+
+      <section anchor="uc-issuer">
+        <name>Issuer Reporting</name>
+        <t>An issuer system reports each certificate it issues, with its
+        validity period and, where available, the renewal window suggested by
+        ACME Renewal Information <xref target="RFC9773"/>. This gives the
+        Collector the expected state against which deployments can be
+        compared.</t>
+      </section>
+
+      <section anchor="uc-verify">
+        <name>Deployment Verification</name>
+        <t>By comparing records about the same Subject and Location that carry
+        different evidence types, a Collector can detect common failures: a
+        certificate issued but never deployed, deployed to disk but not loaded
+        by the service, or loaded on one node of a cluster but not on the
+        others.</t>
+      </section>
+
+      <section anchor="uc-notserved">
+        <name>Certificates Not Presented on a Network Port</name>
+        <t>Client certificates, signing certificates, certification authority
+        certificates, and certificates used only inside an application are
+        never seen by a network observer. Local agents and configuration
+        management systems can report them with the same record format.</t>
+      </section>
+
+      <section anchor="uc-constrained">
+        <name>Appliances and Constrained Devices</name>
+        <t>Many network appliances, printers and management controllers cannot
+        run an issuance client or a local agent and expose only limited
+        management interfaces. The information model is designed so that it
+        can be mapped to such interfaces in the future (see <xref target="future"/>),
+        while proxy reporting by a configuration management system covers
+        these devices in the meantime.</t>
+      </section>
+    </section>
+
+    <section anchor="model">
+      <name>Information Model</name>
+      <t>A Certificate Observation Record contains the following elements.
+      Element names here are abstract; their JSON names are given in
+      <xref target="json"/>.</t>
+
+      <dl newline="true" spacing="normal">
+        <dt>version (mandatory)</dt>
+        <dd>The version of the record format. This document defines
+        version 1.</dd>
+        <dt>record identifier (optional)</dt>
+        <dd>An identifier chosen by the Reporter, unique per Reporter, that
+        allows a Collector to detect duplicate deliveries.</dd>
+        <dt>reporter (mandatory)</dt>
+        <dd>A stable identifier of the Reporter, such as a fully qualified
+        domain name or a URI.</dd>
+        <dt>subject (mandatory)</dt>
+        <dd>Identifies the system the record is about: a host name, a service
+        name, and/or an opaque identifier assigned by the operator. At least
+        one of these <bcp14>MUST</bcp14> be present. When the Reporter
+        describes itself, the subject identifies the Reporter.</dd>
+        <dt>location (mandatory)</dt>
+        <dd>Where the certificate is used or stored on the Subject: a network
+        address, port and server name indication value; a file path; a
+        certificate store and entry label; or a configuration item name.
+        At least one element <bcp14>MUST</bcp14> be present.</dd>
+        <dt>evidence type (mandatory)</dt>
+        <dd>How the information was obtained (<xref target="evidence"/>).</dd>
+        <dt>observed-at (mandatory)</dt>
+        <dd>The time at which the Reporter obtained the information.</dd>
+        <dt>valid-for (optional)</dt>
+        <dd>The number of seconds after observed-at during which the Reporter
+        considers the record current. A Collector treats a record as stale
+        after this period (<xref target="freshness"/>).</dd>
+        <dt>certificate (conditional)</dt>
+        <dd>A description of the certificate: its SHA-256 fingerprint
+        (mandatory within this element), subject and issuer distinguished
+        names, subject alternative names, serial number, validity period,
+        public key algorithm and size, and signature algorithm. The DER
+        encoding of the certificate <bcp14>MAY</bcp14> be included. This
+        element <bcp14>MUST</bcp14> be present unless the record reports that
+        an expected certificate was not found.</dd>
+        <dt>chain (optional)</dt>
+        <dd>The fingerprints of the intermediate certificates presented or
+        stored with the certificate, the result of path validation as
+        performed by the Reporter, and the trust anchor used.</dd>
+        <dt>expected fingerprint (optional)</dt>
+        <dd>The SHA-256 fingerprint of the certificate that the Reporter
+        believes should be at this Location, for example as declared by a
+        configuration management system.</dd>
+        <dt>renewal window (optional)</dt>
+        <dd>The start and end of the period in which renewal is suggested,
+        for example as obtained from ACME Renewal Information.</dd>
+        <dt>status (optional)</dt>
+        <dd>A list of conditions the Reporter detected (<xref target="status"/>).</dd>
+        <dt>extensions (optional)</dt>
+        <dd>Additional elements defined by future specifications or by
+        private agreement. Collectors <bcp14>MUST</bcp14> ignore extensions
+        they do not understand.</dd>
+      </dl>
+
+      <section anchor="evidence">
+        <name>Evidence Types</name>
+        <t>The evidence type allows a Collector to weigh and compare records.
+        This document defines the following values:</t>
+        <dl newline="false" spacing="normal">
+          <dt>issued:</dt>
+          <dd>An issuer system issued this certificate for this Subject and
+          Location.</dd>
+          <dt>declared:</dt>
+          <dd>The configuration of the Subject states that this certificate
+          should be at this Location. No deployment or observation is
+          implied.</dd>
+          <dt>deployed:</dt>
+          <dd>A deployment action that placed this certificate at this
+          Location completed successfully. The Reporter did not verify that
+          the service loaded it.</dd>
+          <dt>observed-store:</dt>
+          <dd>The Reporter read the certificate from a file, a platform
+          certificate store or an application key store on the Subject.</dd>
+          <dt>observed-wire:</dt>
+          <dd>The Reporter obtained the certificate from a protocol exchange
+          with the Subject, such as a TLS handshake.</dd>
+        </dl>
+        <t>A Reporter <bcp14>MUST</bcp14> use the evidence type that reflects
+        how it actually obtained the information, and <bcp14>MUST NOT</bcp14>
+        report "observed-store" or "observed-wire" for information derived
+        only from configuration or deployment results. Additional values can
+        be registered (<xref target="iana-evidence"/>).</t>
+      </section>
+
+      <section anchor="status">
+        <name>Status Values</name>
+        <t>A Reporter <bcp14>MAY</bcp14> include one or more of the following
+        status values. Their absence does not imply that the certificate is
+        valid.</t>
+        <dl newline="false" spacing="normal">
+          <dt>not-found:</dt><dd>No certificate was found at the Location.</dd>
+          <dt>expired:</dt><dd>The current time is after the certificate's notAfter.</dd>
+          <dt>not-yet-valid:</dt><dd>The current time is before the certificate's notBefore.</dd>
+          <dt>chain-invalid:</dt><dd>Path validation by the Reporter failed.</dd>
+          <dt>name-mismatch:</dt><dd>The certificate does not match the name used to reach the service.</dd>
+          <dt>unexpected-certificate:</dt><dd>The fingerprint differs from the expected fingerprint.</dd>
+        </dl>
+        <t>Thresholds such as "expiring soon" are policy decisions and are
+        left to the Collector.</t>
+      </section>
+    </section>
+
+    <section anchor="json">
+      <name>JSON Encoding</name>
+      <t>Records are encoded as JSON <xref target="RFC8259"/> objects. One or
+      more records are carried in a record set. Timestamps are RFC 3339
+      <xref target="RFC3339"/> date-time values in UTC. Fingerprints are
+      lowercase hexadecimal SHA-256 digests of the DER-encoded certificate.
+      The structure is defined by the following CDDL <xref target="RFC8610"/>:</t>
+
+      <sourcecode type="cddl"><![CDATA[
+cert-observation-set = {
+  version: 1,
+  records: [+ cert-observation-record]
+}
+
+cert-observation-record = {
+  version: 1,
+  ? record-id: tstr,
+  reporter: tstr,
+  subject: subject,
+  location: location,
+  evidence: evidence-type,
+  observed-at: timestamp,
+  ? valid-for: uint,
+  ? certificate: certificate-info,
+  ? chain: chain-info,
+  ? expected-sha256: fingerprint,
+  ? renewal-window: renewal-window,
+  ? status: [+ status-value],
+  ? extensions: { * tstr => any }
+}
+
+subject = {
+  ? host: tstr,
+  ? service: tstr,
+  ? id: tstr
+}
+
+location = {
+  ? address: tstr,
+  ? port: uint .le 65535,
+  ? sni: tstr,
+  ? path: tstr,
+  ? store: tstr,
+  ? label: tstr,
+  ? config-item: tstr
+}
+
+evidence-type = "issued" / "declared" / "deployed" /
+                "observed-store" / "observed-wire" / tstr
+
+certificate-info = {
+  sha256: fingerprint,
+  ? subject-dn: tstr,
+  ? san: [* tstr],
+  ? issuer-dn: tstr,
+  ? serial: tstr,
+  ? not-before: timestamp,
+  not-after: timestamp,
+  ? public-key-algorithm: tstr,
+  ? public-key-size: uint,
+  ? signature-algorithm: tstr,
+  ? der: tstr
+}
+
+chain-info = {
+  ? certificates: [* fingerprint],
+  validation: "valid" / "invalid" / "incomplete" / "not-checked",
+  ? trust-anchor: tstr
+}
+
+renewal-window = {
+  start: timestamp,
+  end: timestamp
+}
+
+status-value = "not-found" / "expired" / "not-yet-valid" /
+               "chain-invalid" / "name-mismatch" /
+               "unexpected-certificate" / tstr
+
+timestamp = tstr          ; RFC 3339 date-time, UTC
+fingerprint = tstr .regexp "[0-9a-f]{64}"
+]]></sourcecode>
+
+      <t>The "der" member, when present, contains the base64 encoding
+      <xref target="RFC4648"/> of the DER-encoded certificate. The
+      "public-key-algorithm" and "signature-algorithm" members contain
+      human-readable algorithm names; a future revision may reference an
+      algorithm registry instead.</t>
+
+      <section anchor="example-wire">
+        <name>Example: Network Observation</name>
+        <sourcecode type="json"><![CDATA[
+{
+  "version": 1,
+  "records": [
+    {
+      "version": 1,
+      "record-id": "obs-7f3a2c",
+      "reporter": "observer1.example.net",
+      "subject": { "host": "www.example.net", "service": "https" },
+      "location": { "address": "192.0.2.10", "port": 443,
+                    "sni": "www.example.net" },
+      "evidence": "observed-wire",
+      "observed-at": "2026-11-23T08:00:00Z",
+      "valid-for": 3600,
+      "certificate": {
+        "sha256":
+  "9f2c6b1e0d4a5f8e7c3b2a1908f7e6d5c4b3a2918f7e6d5c4b3a291807f6e5d4",
+        "subject-dn": "CN=www.example.net",
+        "san": ["www.example.net", "example.net"],
+        "issuer-dn": "CN=Example Issuing CA, O=Example",
+        "not-before": "2026-11-01T00:00:00Z",
+        "not-after": "2027-05-19T23:59:59Z",
+        "public-key-algorithm": "ECDSA P-256",
+        "signature-algorithm": "ecdsa-with-SHA384"
+      },
+      "chain": { "validation": "valid" }
+    }
+  ]
+}
+]]></sourcecode>
+      </section>
+
+      <section anchor="example-proxy">
+        <name>Example: Proxy Reporting by a Configuration Management System</name>
+        <t>A configuration management system reports, on behalf of a printer
+        that the Collector cannot reach, that it deployed a certificate. A
+        second record, produced by a collection task the system ran on the
+        printer's management interface, reports that the old certificate is
+        still being served.</t>
+        <sourcecode type="json"><![CDATA[
+{
+  "version": 1,
+  "records": [
+    {
+      "version": 1,
+      "reporter": "cms.example.net",
+      "subject": { "host": "printer-2.example.net" },
+      "location": { "port": 443,
+                    "config-item": "web-ui-certificate" },
+      "evidence": "deployed",
+      "observed-at": "2026-11-23T07:55:12Z",
+      "valid-for": 86400,
+      "certificate": {
+        "sha256":
+  "1b7d1c0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c",
+        "not-after": "2027-02-20T12:00:00Z"
+      }
+    },
+    {
+      "version": 1,
+      "reporter": "cms.example.net",
+      "subject": { "host": "printer-2.example.net" },
+      "location": { "port": 443 },
+      "evidence": "observed-wire",
+      "observed-at": "2026-11-23T07:58:40Z",
+      "valid-for": 86400,
+      "certificate": {
+        "sha256":
+  "e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3",
+        "not-after": "2026-12-02T12:00:00Z"
+      },
+      "expected-sha256":
+  "1b7d1c0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c",
+      "status": ["unexpected-certificate"]
+    }
+  ]
+}
+]]></sourcecode>
+      </section>
+    </section>
+
+    <section anchor="bindings">
+      <name>Exchange Mechanisms</name>
+
+      <section anchor="http-push">
+        <name>HTTP Push</name>
+        <t>A Reporter sends a record set to a Collector using an HTTP
+        <xref target="RFC9110"/> POST request to a URI configured by the
+        operator. The request content <bcp14>MUST</bcp14> be a
+        cert-observation-set with media type
+        "application/cert-observation+json" (<xref target="iana-media"/>).
+        HTTPS <bcp14>MUST</bcp14> be used.</t>
+        <t>The Collector responds as follows:</t>
+        <ul>
+          <li>202 (Accepted) when the record set was accepted for
+          processing;</li>
+          <li>400 (Bad Request) when the content is not a valid record set;</li>
+          <li>401 (Unauthorized) or 403 (Forbidden) when the Reporter is not
+          authenticated, or is not authorised to report on one or more of the
+          Subjects in the set (<xref target="security"/>);</li>
+          <li>415 (Unsupported Media Type) when the media type or version is
+          not supported.</li>
+        </ul>
+        <t>A Collector <bcp14>MAY</bcp14> accept part of a record set and
+        reject records for Subjects the Reporter is not authorised to report
+        on; it then <bcp14>SHOULD</bcp14> return 202 and indicate the rejected
+        records using a problem details object <xref target="RFC9457"/>.
+        Reporters <bcp14>SHOULD</bcp14> retry failed deliveries with
+        exponential back-off and <bcp14>SHOULD</bcp14> include record
+        identifiers so that retries do not create duplicates.</t>
+      </section>
+
+      <section anchor="http-pull">
+        <name>HTTP Pull</name>
+        <t>A Reporter <bcp14>MAY</bcp14> instead publish its current record set
+        at an HTTPS URI, which a Collector retrieves with GET. The Reporter
+        <bcp14>SHOULD</bcp14> provide an entity tag so that the Collector can
+        use conditional requests. Pull requires the Collector to reach the
+        Reporter and is therefore not suitable for the use case in
+        <xref target="uc-unreachable"/>; push or file handoff should be used
+        there.</t>
+      </section>
+
+      <section anchor="file-handoff">
+        <name>File-Based Handoff</name>
+        <t>Many endpoints already run a monitoring or log forwarding agent
+        that transports local files to a central system. A Reporter
+        <bcp14>MAY</bcp14> write record sets as files to a directory
+        configured for such an agent. Each file contains one
+        cert-observation-set and <bcp14>SHOULD</bcp14> use the file name
+        extension ".cor.json". Reporters <bcp14>MUST</bcp14> write files
+        atomically, for example by writing to a temporary name and renaming,
+        so that a partially written file is never forwarded.</t>
+      </section>
+    </section>
+
+    <section anchor="processing">
+      <name>Collector Processing</name>
+
+      <section anchor="correlation">
+        <name>Correlation</name>
+        <t>A Collector groups records by Subject and Location. Within a group,
+        it compares certificate fingerprints across evidence types. The
+        following comparisons are useful; the resulting alerts are a matter of
+        local policy:</t>
+        <ul>
+          <li>a newer "issued" or "declared" fingerprint with no matching
+          "deployed" record: the certificate was not distributed;</li>
+          <li>a "deployed" or "observed-store" fingerprint that differs from
+          the "observed-wire" fingerprint: the service did not load the new
+          certificate;</li>
+          <li>different "observed-wire" fingerprints for the same service name
+          from different addresses: inconsistent nodes behind a load
+          balancer;</li>
+          <li>any record with an expected fingerprint that differs from the
+          reported one.</li>
+        </ul>
+        <t>Location elements can be described differently by different
+        Reporters. Collectors <bcp14>SHOULD</bcp14> allow operators to define
+        equivalences, for example between a file path and the network port
+        that serves it.</t>
+      </section>
+
+      <section anchor="freshness">
+        <name>Freshness</name>
+        <t>A record whose observed-at plus valid-for is in the past is stale.
+        A Collector <bcp14>MUST NOT</bcp14> treat a stale record as evidence
+        that a certificate is currently present, and <bcp14>SHOULD</bcp14>
+        alert when a Subject that previously reported stops reporting. This
+        prevents a failed Reporter, for example a configuration management
+        run that no longer executes, from hiding an expiring certificate
+        behind its last successful report.</t>
+        <t>When valid-for is absent, the Collector applies a locally configured
+        default.</t>
+      </section>
+    </section>
+
+    <section anchor="future">
+      <name>Other Bindings</name>
+      <t>The information model in <xref target="model"/> is independent of
+      transport. Future documents may define:</t>
+      <ul>
+        <li>a YANG <xref target="RFC7950"/> data model, so that network
+        devices can expose records through existing management protocols;</li>
+        <li>a mapping to SNMP for devices that only support SNMP, including
+        notifications for conditions such as a changed fingerprint or a
+        certificate approaching expiry;</li>
+        <li>a CBOR encoding for constrained devices.</li>
+      </ul>
+      <t>The relationship to cryptographic inventories of software artifacts,
+      which describe algorithms and keys embedded in software rather than
+      certificates observed in operation, is also for further study.</t>
+    </section>
+
+    <section anchor="impl">
+      <name>Implementation Status</name>
+      <t>[RFC Editor: please remove this section before publication, together
+      with the reference to RFC 7942.]</t>
+      <t>This section records the status of known implementations of the
+      protocol defined by this specification at the time of posting of this
+      Internet-Draft, and is based on a proposal described in
+      <xref target="RFC7942"/>.</t>
+      <t>No implementations are known at the time of writing. The author plans
+      a prototype consisting of a local agent and a configuration management
+      task that produce records, and an exporter for an open-source
+      monitoring system that consumes them.</t>
+    </section>
+
+    <section anchor="security">
+      <name>Security Considerations</name>
+
+      <section anchor="sec-auth">
+        <name>Reporter Authentication and Authorisation</name>
+        <t>A false record can hide a problem: a forged "observed-wire" record
+        with a valid certificate could suppress an expiry alert until the
+        service fails. Collectors <bcp14>MUST</bcp14> authenticate Reporters,
+        for example using TLS client certificates or bearer tokens over
+        HTTPS, and <bcp14>MUST</bcp14> maintain an authorisation policy that
+        states which Subjects each Reporter may report on. By default, a
+        Reporter <bcp14>SHOULD</bcp14> only be authorised to report on
+        itself; proxy reporting <bcp14>SHOULD</bcp14> require explicit
+        configuration.</t>
+        <t>Where records pass through intermediaries such as file-forwarding
+        agents, the Collector authenticates the agent rather than the
+        Reporter. Deployments that need end-to-end integrity
+        <bcp14>MAY</bcp14> sign record sets using JSON Web Signature
+        <xref target="RFC7515"/>; the details are left for a future
+        revision.</t>
+      </section>
+
+      <section anchor="sec-replay">
+        <name>Replay and Staleness</name>
+        <t>An attacker who can replay old records could make a Collector
+        believe a certificate is still in place. The freshness rules in
+        <xref target="freshness"/> limit the effect of replay. Collectors
+        <bcp14>SHOULD</bcp14> reject records whose observed-at lies
+        significantly in the future and <bcp14>SHOULD</bcp14> discard
+        duplicate record identifiers from the same Reporter.</t>
+      </section>
+
+      <section anchor="sec-disclosure">
+        <name>Information Disclosure</name>
+        <t>A collection of records is a detailed map of an organisation's
+        services, internal names, certification authorities and weak
+        algorithms, which is valuable to an attacker. Records
+        <bcp14>MUST</bcp14> be transmitted only over authenticated, encrypted
+        channels, and Collectors <bcp14>SHOULD</bcp14> protect stored records
+        accordingly. Files written for file-based handoff <bcp14>SHOULD</bcp14>
+        be readable only by the forwarding agent.</t>
+      </section>
+
+      <section anchor="sec-keys">
+        <name>Private Keys</name>
+        <t>Records describe certificates only. A Reporter <bcp14>MUST NOT</bcp14>
+        include private keys or any secret key material in a record, including
+        in extensions.</t>
+      </section>
+    </section>
+
+    <section anchor="privacy">
+      <name>Privacy Considerations</name>
+      <t>Client certificates and some server certificates contain personal
+      data such as names and email addresses. Reporters
+      <bcp14>SHOULD</bcp14> omit the subject distinguished name, subject
+      alternative names and DER encoding of certificates that identify
+      individuals unless the operator needs them, and rely on the
+      fingerprint for correlation.</t>
+    </section>
+
+    <section anchor="iana">
+      <name>IANA Considerations</name>
+
+      <section anchor="iana-media">
+        <name>Media Type Registration</name>
+        <t>IANA is requested to register the following media type in the
+        "Media Types" registry <xref target="RFC6838"/>:</t>
+        <dl newline="false" spacing="compact">
+          <dt>Type name:</dt><dd>application</dd>
+          <dt>Subtype name:</dt><dd>cert-observation+json</dd>
+          <dt>Required parameters:</dt><dd>N/A</dd>
+          <dt>Optional parameters:</dt><dd>N/A</dd>
+          <dt>Encoding considerations:</dt><dd>binary; as for application/json <xref target="RFC8259"/></dd>
+          <dt>Security considerations:</dt><dd>See <xref target="security"/> of this document.</dd>
+          <dt>Interoperability considerations:</dt><dd>N/A</dd>
+          <dt>Published specification:</dt><dd>This document</dd>
+          <dt>Applications that use this media type:</dt><dd>Certificate monitoring, inventory and lifecycle management systems</dd>
+          <dt>Fragment identifier considerations:</dt><dd>As for application/json</dd>
+          <dt>Additional information:</dt><dd>File extension: .cor.json</dd>
+          <dt>Person and email address to contact for further information:</dt><dd>See the Authors' Addresses section.</dd>
+          <dt>Intended usage:</dt><dd>COMMON</dd>
+          <dt>Restrictions on usage:</dt><dd>None</dd>
+          <dt>Author:</dt><dd>See the Authors' Addresses section.</dd>
+          <dt>Change controller:</dt><dd>IETF</dd>
+        </dl>
+      </section>
+
+      <section anchor="iana-evidence">
+        <name>Certificate Observation Evidence Types Registry</name>
+        <t>IANA is requested to create a registry titled "Certificate
+        Observation Evidence Types". The registration policy is Specification
+        Required <xref target="RFC8126"/>. Each entry has a name, a
+        description and a reference. The initial contents are:</t>
+        <table anchor="tab-evidence">
+          <name>Initial Evidence Types</name>
+          <thead>
+            <tr><th>Name</th><th>Description</th><th>Reference</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>issued</td><td>Issued by an issuer system</td><td>This document</td></tr>
+            <tr><td>declared</td><td>Stated by configuration</td><td>This document</td></tr>
+            <tr><td>deployed</td><td>Placed by a deployment action</td><td>This document</td></tr>
+            <tr><td>observed-store</td><td>Read from a file or store</td><td>This document</td></tr>
+            <tr><td>observed-wire</td><td>Obtained from a protocol exchange</td><td>This document</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section anchor="iana-status">
+        <name>Certificate Observation Status Values Registry</name>
+        <t>IANA is requested to create a registry titled "Certificate
+        Observation Status Values", with registration policy Specification
+        Required <xref target="RFC8126"/>, containing the values defined in
+        <xref target="status"/> with this document as reference.</t>
+      </section>
+    </section>
+  </middle>
+
+  <back>
+    <references>
+      <name>References</name>
+      <references>
+        <name>Normative References</name>
+
+        <reference anchor="RFC2119" target="https://www.rfc-editor.org/info/rfc2119">
+          <front>
+            <title>Key words for use in RFCs to Indicate Requirement Levels</title>
+            <author initials="S." surname="Bradner" fullname="S. Bradner"/>
+            <date year="1997" month="March"/>
+          </front>
+          <seriesInfo name="BCP" value="14"/>
+          <seriesInfo name="RFC" value="2119"/>
+          <seriesInfo name="DOI" value="10.17487/RFC2119"/>
+        </reference>
+
+        <reference anchor="RFC8174" target="https://www.rfc-editor.org/info/rfc8174">
+          <front>
+            <title>Ambiguity of Uppercase vs Lowercase in RFC 2119 Key Words</title>
+            <author initials="B." surname="Leiba" fullname="B. Leiba"/>
+            <date year="2017" month="May"/>
+          </front>
+          <seriesInfo name="BCP" value="14"/>
+          <seriesInfo name="RFC" value="8174"/>
+          <seriesInfo name="DOI" value="10.17487/RFC8174"/>
+        </reference>
+
+        <reference anchor="RFC3339" target="https://www.rfc-editor.org/info/rfc3339">
+          <front>
+            <title>Date and Time on the Internet: Timestamps</title>
+            <author initials="G." surname="Klyne" fullname="G. Klyne"/>
+            <author initials="C." surname="Newman" fullname="C. Newman"/>
+            <date year="2002" month="July"/>
+          </front>
+          <seriesInfo name="RFC" value="3339"/>
+          <seriesInfo name="DOI" value="10.17487/RFC3339"/>
+        </reference>
+
+        <reference anchor="RFC4648" target="https://www.rfc-editor.org/info/rfc4648">
+          <front>
+            <title>The Base16, Base32, and Base64 Data Encodings</title>
+            <author initials="S." surname="Josefsson" fullname="S. Josefsson"/>
+            <date year="2006" month="October"/>
+          </front>
+          <seriesInfo name="RFC" value="4648"/>
+          <seriesInfo name="DOI" value="10.17487/RFC4648"/>
+        </reference>
+
+        <reference anchor="RFC5280" target="https://www.rfc-editor.org/info/rfc5280">
+          <front>
+            <title>Internet X.509 Public Key Infrastructure Certificate and Certificate Revocation List (CRL) Profile</title>
+            <author initials="D." surname="Cooper" fullname="D. Cooper"/>
+            <author initials="S." surname="Santesson" fullname="S. Santesson"/>
+            <author initials="S." surname="Farrell" fullname="S. Farrell"/>
+            <author initials="S." surname="Boeyen" fullname="S. Boeyen"/>
+            <author initials="R." surname="Housley" fullname="R. Housley"/>
+            <author initials="W." surname="Polk" fullname="W. Polk"/>
+            <date year="2008" month="May"/>
+          </front>
+          <seriesInfo name="RFC" value="5280"/>
+          <seriesInfo name="DOI" value="10.17487/RFC5280"/>
+        </reference>
+
+        <reference anchor="RFC6838" target="https://www.rfc-editor.org/info/rfc6838">
+          <front>
+            <title>Media Type Specifications and Registration Procedures</title>
+            <author initials="N." surname="Freed" fullname="N. Freed"/>
+            <author initials="J." surname="Klensin" fullname="J. Klensin"/>
+            <author initials="T." surname="Hansen" fullname="T. Hansen"/>
+            <date year="2013" month="January"/>
+          </front>
+          <seriesInfo name="BCP" value="13"/>
+          <seriesInfo name="RFC" value="6838"/>
+          <seriesInfo name="DOI" value="10.17487/RFC6838"/>
+        </reference>
+
+        <reference anchor="RFC8126" target="https://www.rfc-editor.org/info/rfc8126">
+          <front>
+            <title>Guidelines for Writing an IANA Considerations Section in RFCs</title>
+            <author initials="M." surname="Cotton" fullname="M. Cotton"/>
+            <author initials="B." surname="Leiba" fullname="B. Leiba"/>
+            <author initials="T." surname="Narten" fullname="T. Narten"/>
+            <date year="2017" month="June"/>
+          </front>
+          <seriesInfo name="BCP" value="26"/>
+          <seriesInfo name="RFC" value="8126"/>
+          <seriesInfo name="DOI" value="10.17487/RFC8126"/>
+        </reference>
+
+        <reference anchor="RFC8259" target="https://www.rfc-editor.org/info/rfc8259">
+          <front>
+            <title>The JavaScript Object Notation (JSON) Data Interchange Format</title>
+            <author initials="T." surname="Bray" fullname="T. Bray" role="editor"/>
+            <date year="2017" month="December"/>
+          </front>
+          <seriesInfo name="STD" value="90"/>
+          <seriesInfo name="RFC" value="8259"/>
+          <seriesInfo name="DOI" value="10.17487/RFC8259"/>
+        </reference>
+
+        <reference anchor="RFC8610" target="https://www.rfc-editor.org/info/rfc8610">
+          <front>
+            <title>Concise Data Definition Language (CDDL): A Notational Convention to Express Concise Binary Object Representation (CBOR) and JSON Data Structures</title>
+            <author initials="H." surname="Birkholz" fullname="H. Birkholz"/>
+            <author initials="C." surname="Vigano" fullname="C. Vigano"/>
+            <author initials="C." surname="Bormann" fullname="C. Bormann"/>
+            <date year="2019" month="June"/>
+          </front>
+          <seriesInfo name="RFC" value="8610"/>
+          <seriesInfo name="DOI" value="10.17487/RFC8610"/>
+        </reference>
+
+        <reference anchor="RFC9110" target="https://www.rfc-editor.org/info/rfc9110">
+          <front>
+            <title>HTTP Semantics</title>
+            <author initials="R." surname="Fielding" fullname="R. Fielding" role="editor"/>
+            <author initials="M." surname="Nottingham" fullname="M. Nottingham" role="editor"/>
+            <author initials="J." surname="Reschke" fullname="J. Reschke" role="editor"/>
+            <date year="2022" month="June"/>
+          </front>
+          <seriesInfo name="STD" value="97"/>
+          <seriesInfo name="RFC" value="9110"/>
+          <seriesInfo name="DOI" value="10.17487/RFC9110"/>
+        </reference>
+
+        <reference anchor="RFC9457" target="https://www.rfc-editor.org/info/rfc9457">
+          <front>
+            <title>Problem Details for HTTP APIs</title>
+            <author initials="M." surname="Nottingham" fullname="M. Nottingham"/>
+            <author initials="E." surname="Wilde" fullname="E. Wilde"/>
+            <author initials="S." surname="Dalal" fullname="S. Dalal"/>
+            <date year="2023" month="July"/>
+          </front>
+          <seriesInfo name="RFC" value="9457"/>
+          <seriesInfo name="DOI" value="10.17487/RFC9457"/>
+        </reference>
+      </references>
+
+      <references>
+        <name>Informative References</name>
+
+        <reference anchor="RFC7515" target="https://www.rfc-editor.org/info/rfc7515">
+          <front>
+            <title>JSON Web Signature (JWS)</title>
+            <author initials="M." surname="Jones" fullname="M. Jones"/>
+            <author initials="J." surname="Bradley" fullname="J. Bradley"/>
+            <author initials="N." surname="Sakimura" fullname="N. Sakimura"/>
+            <date year="2015" month="May"/>
+          </front>
+          <seriesInfo name="RFC" value="7515"/>
+          <seriesInfo name="DOI" value="10.17487/RFC7515"/>
+        </reference>
+
+        <reference anchor="RFC7942" target="https://www.rfc-editor.org/info/rfc7942">
+          <front>
+            <title>Improving Awareness of Running Code: The Implementation Status Section</title>
+            <author initials="Y." surname="Sheffer" fullname="Y. Sheffer"/>
+            <author initials="A." surname="Farrel" fullname="A. Farrel"/>
+            <date year="2016" month="July"/>
+          </front>
+          <seriesInfo name="BCP" value="205"/>
+          <seriesInfo name="RFC" value="7942"/>
+          <seriesInfo name="DOI" value="10.17487/RFC7942"/>
+        </reference>
+
+        <reference anchor="RFC7950" target="https://www.rfc-editor.org/info/rfc7950">
+          <front>
+            <title>The YANG 1.1 Data Modeling Language</title>
+            <author initials="M." surname="Bjorklund" fullname="M. Bjorklund" role="editor"/>
+            <date year="2016" month="August"/>
+          </front>
+          <seriesInfo name="RFC" value="7950"/>
+          <seriesInfo name="DOI" value="10.17487/RFC7950"/>
+        </reference>
+
+        <reference anchor="RFC8555" target="https://www.rfc-editor.org/info/rfc8555">
+          <front>
+            <title>Automatic Certificate Management Environment (ACME)</title>
+            <author initials="R." surname="Barnes" fullname="R. Barnes"/>
+            <author initials="J." surname="Hoffman-Andrews" fullname="J. Hoffman-Andrews"/>
+            <author initials="D." surname="McCarney" fullname="D. McCarney"/>
+            <author initials="J." surname="Kasten" fullname="J. Kasten"/>
+            <date year="2019" month="March"/>
+          </front>
+          <seriesInfo name="RFC" value="8555"/>
+          <seriesInfo name="DOI" value="10.17487/RFC8555"/>
+        </reference>
+
+        <reference anchor="RFC9162" target="https://www.rfc-editor.org/info/rfc9162">
+          <front>
+            <title>Certificate Transparency Version 2.0</title>
+            <author initials="B." surname="Laurie" fullname="B. Laurie"/>
+            <author initials="E." surname="Messeri" fullname="E. Messeri"/>
+            <author initials="R." surname="Stradling" fullname="R. Stradling"/>
+            <date year="2021" month="December"/>
+          </front>
+          <seriesInfo name="RFC" value="9162"/>
+          <seriesInfo name="DOI" value="10.17487/RFC9162"/>
+        </reference>
+
+        <reference anchor="RFC9773" target="https://www.rfc-editor.org/info/rfc9773">
+          <front>
+            <title>ACME Renewal Information (ARI) Extension</title>
+            <author initials="A." surname="Gable" fullname="A. Gable"/>
+            <date year="2025"/>
+          </front>
+          <seriesInfo name="RFC" value="9773"/>
+        </reference>
+
+        <reference anchor="SC-081">
+          <front>
+            <title>Ballot SC-081v3: Introduce Schedule of Reducing Validity and Data Reuse Periods</title>
+            <author><organization>CA/Browser Forum</organization></author>
+            <date year="2025" month="April"/>
+          </front>
+        </reference>
+      </references>
+    </references>
+
+    <section anchor="open-issues" numbered="false" removeInRFC="true">
+      <name>Open Issues</name>
+      <ul>
+        <li>Should records be signable end to end, and with which mechanism?</li>
+        <li>Should algorithm names reference an existing IANA registry?</li>
+        <li>Is a single media type for record sets sufficient, or is a
+        separate type for single records needed?</li>
+        <li>Which working group is the right home: OPSAWG, ACME or another?</li>
+        <li>How should Subjects be identified consistently across Reporters?</li>
+      </ul>
+    </section>
+
+    <section anchor="ack" numbered="false">
+      <name>Acknowledgments</name>
+      <t>TBD.</t>
+    </section>
+  </back>
+</rfc>

@@ -1,0 +1,76 @@
+; Certificate Observation Record - CDDL (RFC 8610)
+; Source of truth: draft/draft-barcelo-opsawg-cert-observation.xml, section "JSON Encoding".
+; Keep this file in sync with the draft.
+
+cert-observation-set = {
+  version: 1,
+  records: [+ cert-observation-record]
+}
+
+cert-observation-record = {
+  version: 1,
+  ? record-id: tstr,
+  reporter: tstr,
+  subject: subject,
+  location: location,
+  evidence: evidence-type,
+  observed-at: timestamp,
+  ? valid-for: uint,
+  ? certificate: certificate-info,
+  ? chain: chain-info,
+  ? expected-sha256: fingerprint,
+  ? renewal-window: renewal-window,
+  ? status: [+ status-value],
+  ? extensions: { * tstr => any }
+}
+
+subject = {
+  ? host: tstr,
+  ? service: tstr,
+  ? id: tstr
+}
+
+location = {
+  ? address: tstr,
+  ? port: uint .le 65535,
+  ? sni: tstr,
+  ? path: tstr,
+  ? store: tstr,
+  ? label: tstr,
+  ? config-item: tstr
+}
+
+evidence-type = "issued" / "declared" / "deployed" /
+                "observed-store" / "observed-wire" / tstr
+
+certificate-info = {
+  sha256: fingerprint,
+  ? subject-dn: tstr,
+  ? san: [* tstr],
+  ? issuer-dn: tstr,
+  ? serial: tstr,
+  ? not-before: timestamp,
+  not-after: timestamp,
+  ? public-key-algorithm: tstr,
+  ? public-key-size: uint,
+  ? signature-algorithm: tstr,
+  ? der: tstr
+}
+
+chain-info = {
+  ? certificates: [* fingerprint],
+  validation: "valid" / "invalid" / "incomplete" / "not-checked",
+  ? trust-anchor: tstr
+}
+
+renewal-window = {
+  start: timestamp,
+  end: timestamp
+}
+
+status-value = "not-found" / "expired" / "not-yet-valid" /
+               "chain-invalid" / "name-mismatch" /
+               "unexpected-certificate" / tstr
+
+timestamp = tstr          ; RFC 3339 date-time, UTC
+fingerprint = tstr .regexp "[0-9a-f]{64}"

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "version": 1,
+      "record-id": "obs-7f3a2c",
+      "reporter": "observer1.example.net",
+      "subject": {
+        "host": "www.example.net",
+        "service": "https"
+      },
+      "location": {
+        "address": "192.0.2.10",
+        "port": 443,
+        "sni": "www.example.net"
+      },
+      "evidence": "observed-wire",
+      "observed-at": "2026-11-23T08:00:00Z",
+      "valid-for": 3600,
+      "certificate": {
+        "sha256": "9f2c6b1e0d4a5f8e7c3b2a1908f7e6d5c4b3a2918f7e6d5c4b3a291807f6e5d4",
+        "subject-dn": "CN=www.example.net",
+        "san": [
+          "www.example.net",
+          "example.net"
+        ],
+        "issuer-dn": "CN=Example Issuing CA, O=Example",
+        "not-before": "2026-11-01T00:00:00Z",
+        "not-after": "2027-05-19T23:59:59Z",
+        "public-key-algorithm": "ECDSA P-256",
+        "signature-algorithm": "ecdsa-with-SHA384"
+      },
+      "chain": {
+        "validation": "valid"
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "version": 1,
+      "reporter": "cms.example.net",
+      "subject": {
+        "host": "printer-2.example.net"
+      },
+      "location": {
+        "port": 443,
+        "config-item": "web-ui-certificate"
+      },
+      "evidence": "deployed",
+      "observed-at": "2026-11-23T07:55:12Z",
+      "valid-for": 86400,
+      "certificate": {
+        "sha256": "1b7d1c0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c",
+        "not-after": "2027-02-20T12:00:00Z"
+      }
+    },
+    {
+      "version": 1,
+      "reporter": "cms.example.net",
+      "subject": {
+        "host": "printer-2.example.net"
+      },
+      "location": {
+        "port": 443
+      },
+      "evidence": "observed-wire",
+      "observed-at": "2026-11-23T07:58:40Z",
+      "valid-for": 86400,
+      "certificate": {
+        "sha256": "e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3",
+        "not-after": "2026-12-02T12:00:00Z"
+      },
+      "expected-sha256": "1b7d1c0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c",
+      "status": [
+        "unexpected-certificate"
+      ]
+    }
+  ]
+}
